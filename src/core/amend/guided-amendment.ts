@@ -17,6 +17,7 @@ import type {
 } from './types.js';
 import { getAmendmentTypeDescription } from './types.js';
 import { analyzeImpact } from './impact-analysis.js';
+import { writeSpecChanges } from './spec-writer.js';
 import { isInteractive } from '../../utils/interactive.js';
 
 // -----------------------------------------------------------------------------
@@ -168,7 +169,11 @@ async function guideDesignIssueAmendment(
     );
     if (specChanges.length > 0) {
       record.changes.specs = specChanges;
-      console.log(chalk.green(`✓ Updated ${specChanges.length} spec changes`));
+
+      // Write changes to actual spec files
+      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
+
+      console.log(chalk.green(`✓ Updated ${specChanges.length} spec files`));
     }
   }
 
@@ -237,7 +242,11 @@ async function guideMissingFeatureAmendment(
     );
     if (specChanges.length > 0) {
       record.changes.specs = specChanges;
-      console.log(chalk.green(`✓ Added ${specChanges.filter(s => s.operation === 'ADDED').length} new requirements`));
+
+      // Write changes to actual spec files
+      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
+
+      console.log(chalk.green(`✓ Added ${specChanges.filter(s => s.operation === 'ADDED').length} new requirements to spec files`));
     }
   }
 
@@ -276,7 +285,11 @@ async function guideSpecErrorAmendment(
     );
     if (specChanges.length > 0) {
       record.changes.specs = specChanges;
-      console.log(chalk.green(`✓ Corrected ${specChanges.length} spec issues`));
+
+      // Write changes to actual spec files
+      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
+
+      console.log(chalk.green(`✓ Corrected ${specChanges.length} spec issues in files`));
     }
   }
 
@@ -332,7 +345,11 @@ async function guideScopeChangeAmendment(
     );
     if (specChanges.length > 0) {
       record.changes.specs = specChanges;
-      console.log(chalk.green(`✓ Updated specs`));
+
+      // Write changes to actual spec files
+      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
+
+      console.log(chalk.green(`✓ Updated specs in files`));
     }
   }
 
@@ -406,6 +423,9 @@ async function guideOtherAmendment(
         const specChanges = await promptSpecsEdit(changeDir, artifacts.specs, '', options);
         if (specChanges.length > 0) {
           record.changes.specs = specChanges;
+
+          // Write changes to actual spec files
+          await writeSpecChanges(changeDir, specChanges, artifacts.specs);
         }
       }
     }

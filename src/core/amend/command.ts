@@ -20,7 +20,8 @@ import { getArtifactsForType, getAmendmentTypeDescription } from './types.js';
 import { getTaskProgressForChange } from '../../utils/task-progress.js';
 import { guidedAmendment } from './guided-amendment.js';
 import { writeAmendmentMd } from './generate-amendment.js';
-import { updateTasksMd } from './update-tasks.js';
+import { enhancedUpdateTasksMd } from './enhanced-task-updater.js';
+import { BackupManager } from './backup-manager.js';
 import { isInteractive } from '../../utils/interactive.js';
 
 // -----------------------------------------------------------------------------
@@ -102,7 +103,19 @@ export class AmendCommand {
       // 4. Determine amendment type
       const amendmentType = options.type || await this.promptAmendmentType(options);
 
-      // 5. Save state
+      // 5. Create backup before amending
+      const backupManager = new BackupManager();
+      const artifactsToAmend = options.artifacts || getArtifactsForType(amendmentType);
+
+      spinner = ora('Creating backup...').start();
+      const { version, backupDir } = await backupManager.createBackup(
+        changeDir,
+        artifactsToAmend,
+        `Before ${amendmentType} amendment`
+      );
+      spinner.succeed(`Backup created: v${version} (${backupDir})`);
+
+      // 6. Save state
       const state: AmendmentState = {
         changeName,
         timestamp: new Date().toISOString(),
@@ -112,35 +125,38 @@ export class AmendCommand {
           inProgress: null,
           pending: []
         },
-        artifactsToAmend: options.artifacts || getArtifactsForType(amendmentType),
+        artifactsToAmend,
         pausedByUser: true
       };
 
       await this.saveAmendmentState(changeDir, state);
 
       console.log(chalk.dim(`\nAmendment type: ${getAmendmentTypeDescription(amendmentType)}`));
-      console.log(chalk.dim(`Artifacts to amend: ${state.artifactsToAmend.join(', ')}\n`));
+      console.log(chalk.dim(`Artifacts to amend: ${artifactsToAmend.join(', ')}\n`));
 
-      // 6. Guide through amendments
+      // 7. Guide through amendments
       const record = await guidedAmendment(changeDir, amendmentType, state, {
         quick: options.quick,
         noInteractive: options.noInteractive
       });
 
-      // 7. Generate amendment.md
+      // 8. Generate amendment.md (with version number)
       spinner = ora('Generating amendment.md...').start();
-      await writeAmendmentMd(changeDir, record);
-      spinner.succeed('Generated amendment.md');
+      await writeAmendmentMd(changeDir, record, version);
+      spinner.succeed(`Generated amendment.md (v${version})`);
 
-      // 8. Update tasks.md
+      // 9. Update tasks.md (enhanced with rollback steps)
       spinner = ora('Updating tasks.md...').start();
-      await updateTasksMd(changeDir, record);
-      spinner.succeed('Updated tasks.md');
+      await enhancedUpdateTasksMd(changeDir, record, version);
+      spinner.succeed('Updated tasks.md with version tracking and rollback steps');
 
-      // 9. Show summary
-      this.showSummary(record);
+      // 10. Update version log
+      await backupManager.updateVersionLog(changeDir, version, record);
 
-      // 10. Ask to resume
+      // 11. Show summary
+      this.showSummary(record, version, backupDir);
+
+      // 12. Ask to resume
       if (!options.quick && !options.noInteractive && isInteractive()) {
         const resume = await this.askToResume();
         if (resume) {
@@ -150,6 +166,8 @@ export class AmendCommand {
 
       return {
         success: true,
+        version,
+        backupDir,
         amendmentPath: path.join(changeDir, 'amendment.md'),
         tasksPreserved: record.changes.tasks?.preserved.length || 0,
         tasksAdded: record.changes.tasks?.added.length || 0,
@@ -277,15 +295,19 @@ export class AmendCommand {
   /**
    * Display summary of the amendment.
    */
-  private showSummary(record: AmendmentRecord): void {
-    console.log(chalk.bold('\n✓ Amendment Complete!\n'));
+  private showSummary(
+    record: AmendmentRecord,
+    version: number,
+    backupDir: string
+  ): void {
+    console.log(chalk.bold(`\n✓ Amendment Complete (v${version})!\n`));
 
     console.log('Changes:');
     if (record.changes.proposal) {
       console.log(`  ${chalk.cyan('proposal.md')}: Updated`);
     }
     if (record.changes.specs?.length) {
-      console.log(`  ${chalk.cyan('specs/')}: ${record.changes.specs.length} changes`);
+      console.log(`  ${chalk.cyan('specs/')}: ${record.changes.specs.length} files updated`);
     }
     if (record.changes.design) {
       console.log(`  ${chalk.cyan('design.md')}: Updated`);
@@ -295,7 +317,8 @@ export class AmendCommand {
       console.log(`  ${chalk.cyan('tasks.md')}: ${t.preserved.length} preserved, ${t.added.length} added, ${t.removed.length} removed`);
     }
 
-    console.log(chalk.dim(`\nGenerated: amendment.md`));
+    console.log(chalk.dim(`\nBackup: ${backupDir}`));
+    console.log(chalk.dim(`Generated: amendment.md`));
   }
 
   /**

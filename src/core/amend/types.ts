@@ -158,6 +158,8 @@ export interface AmendmentRecord {
     changeName: string;
     /** ISO timestamp when amendment was created */
     created: string;
+    /** Type of amendment */
+    amendmentType?: AmendmentType;
     /** Human-readable reason for the amendment */
     reason: string;
     /** What triggered the amendment (e.g., 'Task 2.3 implementation') */
@@ -237,6 +239,10 @@ export interface AmendOptions {
 export interface AmendmentResult {
   /** Whether the amendment was successful */
   success: boolean;
+  /** Version number of this amendment */
+  version?: number;
+  /** Path to the backup directory */
+  backupDir?: string;
   /** Path to the generated amendment.md */
   amendmentPath?: string;
   /** Error message if failed */

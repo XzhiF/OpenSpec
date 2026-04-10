@@ -13,20 +13,31 @@ import type { AmendmentRecord } from './types.js';
  */
 export async function generateAmendmentMd(
   changeDir: string,
-  record: AmendmentRecord
+  record: AmendmentRecord,
+  version: number = 0
 ): Promise<string> {
   const lines: string[] = [];
 
-  // Header
-  lines.push(`# Amendment: ${record.metadata.changeName}`);
+  // Header with version
+  lines.push(`# Amendment v${version}: ${record.metadata.changeName}`);
   lines.push('');
 
   // Metadata
   lines.push('## Metadata');
+  lines.push(`- **Version**: v${version}`);
   lines.push(`- **Created**: ${record.metadata.created}`);
   lines.push(`- **Reason**: ${record.metadata.reason}`);
   lines.push(`- **Triggered By**: ${record.metadata.triggeredBy}`);
   lines.push('');
+
+  // Backup Information (if version > 0)
+  if (version > 0) {
+    lines.push('## Backup Information');
+    lines.push(`- **Previous Version**: v${version - 1}`);
+    lines.push(`- **Backup Location**: .versions/v${version - 1}/`);
+    lines.push(`- **Rollback**: Restore from backup if needed`);
+    lines.push('');
+  }
 
   // Summary
   lines.push('## Summary');
@@ -205,10 +216,17 @@ export async function generateAmendmentMd(
  */
 export async function writeAmendmentMd(
   changeDir: string,
-  record: AmendmentRecord
+  record: AmendmentRecord,
+  version: number = 0
 ): Promise<string> {
-  const content = await generateAmendmentMd(changeDir, record);
-  const amendmentPath = path.join(changeDir, 'amendment.md');
+  const content = await generateAmendmentMd(changeDir, record, version);
+  const amendmentFileName = version > 0 ? `amendment-v${version}.md` : 'amendment.md';
+  const amendmentPath = path.join(changeDir, amendmentFileName);
   await fs.writeFile(amendmentPath, content);
+
+  // Also write/update the latest amendment.md
+  const latestAmendmentPath = path.join(changeDir, 'amendment.md');
+  await fs.writeFile(latestAmendmentPath, content);
+
   return amendmentPath;
 }
