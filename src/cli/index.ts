@@ -507,4 +507,30 @@ newCmd
     }
   });
 
+// Amend command - for mid-implementation artifact amendments
+program
+  .command('amend [change-name]')
+  .description('Amend artifacts during implementation and resume')
+  .option('--type <type>', 'Amendment type: design-issue, missing-feature, spec-error, scope-change, other')
+  .option('--artifacts <list>', 'Comma-separated list of artifacts to amend')
+  .option('--quick', 'Skip confirmation prompts')
+  .action(async (changeName?: string, options?: { type?: string; artifacts?: string; quick?: boolean }) => {
+    try {
+      const { AmendCommand } = await import('../core/amend/command.js');
+      const amendCommand = new AmendCommand();
+      const result = await amendCommand.execute(changeName, {
+        type: options?.type as any,
+        artifacts: options?.artifacts?.split(','),
+        quick: options?.quick
+      });
+      if (!result.success) {
+        process.exit(1);
+      }
+    } catch (error) {
+      console.log();
+      ora().fail(`Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
+  });
+
 program.parse();

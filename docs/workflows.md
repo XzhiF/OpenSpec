@@ -303,6 +303,112 @@ AI:  ✓ Synced specs to openspec/specs/auth/spec.md
 
 Archive will prompt if specs aren't synced. It won't block on incomplete tasks, but it will warn you.
 
+### Handling Mid-Implementation Changes
+
+When implementation reveals unexpected issues, use `/opsx:amend` to update artifacts without starting over:
+
+```text
+/opsx:apply ──► discover issue ──► /opsx:amend ──► /opsx:apply (resume)
+```
+
+#### Amendment Flow
+
+`/opsx:amend` guides you through updating artifacts while preserving completed work:
+
+```text
+You: /opsx:apply add-realtime-notifications
+
+AI:  Working through tasks...
+     ✓ 1.1 Create notifications module
+     ✓ 1.2 Add Socket.io dependencies
+     Working on 1.3: Configure Redis adapter...
+
+     [Discovers load balancer doesn't support sticky sessions]
+
+You: Wait, our load balancer doesn't handle WebSocket sticky sessions.
+     Need to switch to SSE instead.
+
+You: /opsx:amend
+
+AI:  What needs to be amended?
+     1. design-issue
+     2. missing-feature
+     3. spec-error
+     4. scope-change
+     5. other
+
+You: design-issue
+
+AI:  What design issue did you discover?
+
+You: WebSocket requires sticky sessions, switching to SSE
+
+AI:  Updating artifacts...
+
+     ✓ Modified design.md (Socket.io → SSE)
+     ✓ Updated specs/notifications/spec.md (WebSocket req → SSE req)
+     ✓ Updated proposal.md
+     ✓ Updated tasks.md:
+       - Preserved: 2 completed tasks
+       - Added: 4 new SSE tasks
+       - Removed: 2 WebSocket tasks
+
+     Generated amendment.md with rollback plan
+
+You: /opsx:apply
+
+AI:  Resuming from task 1.3...
+     Working on SSE endpoint implementation...
+```
+
+**Amendment types:**
+
+| Type | When to use | Example |
+|------|-------------|---------|
+| `design-issue` | Implementation reveals technical flaw | Load balancer doesn't support WebSocket sticky sessions |
+| `missing-feature` | Forgot functionality in scope | Forgot password change in user profile feature |
+| `spec-error` | Spec doesn't match expected behavior | JWT expiration is 7 days, should be 15 min + refresh |
+| `scope-change` | Business/stakeholder requirement change | Adding notification persistence (was out of scope) |
+| `other` | Something else | Need to rename change folder |
+
+#### What Amendment Preserves
+
+- **Completed tasks**: Checked tasks remain checked
+- **Work history**: Removed tasks preserved as comments
+- **Amendment record**: `amendment.md` documents all changes, includes rollback plan
+- **Coherence**: Validates that related artifacts stay consistent
+
+#### Amendment vs Fresh Change
+
+```text
+                      ┌──────────────────────────────┐
+                      │  Can you proceed with        │
+                      │  the current implementation? │
+                      └────────────┬─────────────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    ▼              ▼              ▼
+               YES            PARTIAL          NO
+               │              │               │
+               ▼              ▼               ▼
+          CONTINUE      AMEND          NEW CHANGE
+          (issue was   (update        (fundamentally
+          minor)       artifacts      different work)
+                       and resume)
+```
+
+**Use amend when:**
+- Issue discovered mid-implementation
+- Some tasks already completed
+- Fix requires artifact updates (design/spec changes)
+- Want to preserve completed work
+
+**Use new change when:**
+- Original change can be archived as-is
+- New work is completely separate
+- Amendment would be larger than original scope
+
 ## When to Use What
 
 ### `/opsx:ff` vs `/opsx:continue`

@@ -13,6 +13,7 @@ For workflow patterns and when to use each command, see [Workflows](workflows.md
 | `/opsx:propose` | Create a change and generate planning artifacts in one step |
 | `/opsx:explore` | Think through ideas before committing to a change |
 | `/opsx:apply` | Implement tasks from the change |
+| `/opsx:amend` | Modify artifacts during implementation and resume |
 | `/opsx:archive` | Archive a completed change |
 
 ### Expanded Workflow Commands (custom workflow selection)
@@ -312,6 +313,70 @@ AI:  Implementing add-dark-mode...
 - Can resume where you left off if interrupted
 - Use for parallel changes by specifying the change name
 - Completion state is tracked in `tasks.md` checkboxes
+
+---
+
+### `/opsx:amend`
+
+Modify artifacts during implementation when you discover design issues, missing features, or spec errors. Allows you to update planning documents without starting over.
+
+**Syntax:**
+```
+/opsx:amend [--type <amendment-type>]
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--type` | No | Amendment type: `design-issue`, `missing-feature`, `spec-error`, `scope-change`, or `other` (prompted if not provided) |
+
+**What it does:**
+- Guides you through identifying what needs to change
+- Updates affected artifacts (proposal, specs, design, tasks)
+- Preserves completed tasks while adding/removing new tasks
+- Generates `amendment.md` documenting all changes
+- Creates rollback plan for reverting if needed
+
+**Example:**
+```
+You: /opsx:amend
+
+AI:  What needs to be amended?
+     1. design-issue - Implementation revealed flaw in approach
+     2. missing-feature - Forgot functionality in scope
+     3. spec-error - Spec doesn't match expected behavior
+     4. scope-change - Stakeholder/business requirement change
+     5. other - Something else
+
+You: design-issue
+
+AI:  What design issue did you discover?
+     (Describe the problem)
+
+You: WebSocket approach requires sticky sessions for load balancing,
+     which our infrastructure doesn't support. Want to switch to SSE.
+
+AI:  Updating affected artifacts...
+
+     Editing design.md...
+     ✓ Updated technical approach to SSE
+
+     Editing specs/notifications/spec.md...
+     ✓ Modified WebSocket requirement → SSE requirement
+
+     ✓ Updated proposal.md
+     ✓ Updated tasks.md (2 preserved, 4 added, 2 removed)
+
+     Generated amendment.md with rollback plan
+     Ready to continue implementation. Run /opsx:apply.
+```
+
+**Tips:**
+- Use when implementation reveals unexpected issues
+- Preserves work already completed in tasks
+- Always generates rollback plan for safety
+- Amendment history tracked in amendment.md
+- Run `/opsx:verify` after amendment to validate coherence
 
 ---
 
