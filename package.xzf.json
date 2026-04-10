@@ -1,7 +1,7 @@
 {
   "name": "xzf-openspec",
-  "version": "1.3.0",
-  "description": "Extended OpenSpec with amend workflow - Personal customized version",
+  "version": "1.3.1",
+  "description": "Extended OpenSpec with amend workflow (includes backup and version tracking) - Personal customized version",
   "keywords": [
     "openspec",
     "xzf",
