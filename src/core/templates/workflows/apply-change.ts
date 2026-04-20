@@ -33,6 +33,23 @@ export function getApplyChangeSkillTemplate(): SkillTemplate {
    - \`schemaName\`: The workflow being used (e.g., "spec-driven")
    - Which artifact contains the tasks (typically "tasks" for spec-driven, check status for others)
 
+2.5. **Check for pending amendment (IMPORTANT)**
+
+   Before implementing tasks, check if there's a pending amendment that needs to be applied:
+   - Read \`amendment.md\` from the change directory (\`openspec/changes/<name>/amendment.md\`)
+   - If amendment.md exists with status \`DRAFT\`:
+     → **STOP**: Tell the user "Amendment is in DRAFT status. Please confirm the amendment first (edit status field in amendment.md to CONFIRMED), then run /opsx:apply again."
+     → Do NOT proceed with task implementation
+   - If amendment.md exists with status \`CONFIRMED\`:
+     → Apply the amendment FIRST before continuing:
+       1. Read the Modification Logic section to understand which artifacts need changes
+       2. Apply modifications to each artifact in the specified order (annotate with version comments like \`<!-- Amendment v{n}: ... -->\`)
+       3. Apply Tasks Rolling Plan to tasks.md (rollback completed tasks, restack pending tasks, append new tasks, deprecate obsolete tasks)
+       4. Update amendment.md status field from CONFIRMED to APPLIED
+     → Then continue with task implementation
+   - If amendment.md exists with status \`APPLIED\` or no amendment.md:
+     → Proceed normally with task implementation
+
 3. **Get apply instructions**
 
    \`\`\`bash
@@ -189,6 +206,23 @@ export function getOpsxApplyCommandTemplate(): CommandTemplate {
    Parse the JSON to understand:
    - \`schemaName\`: The workflow being used (e.g., "spec-driven")
    - Which artifact contains the tasks (typically "tasks" for spec-driven, check status for others)
+
+2.5. **Check for pending amendment (IMPORTANT)**
+
+   Before implementing tasks, check if there's a pending amendment that needs to be applied:
+   - Read \`amendment.md\` from the change directory (\`openspec/changes/<name>/amendment.md\`)
+   - If amendment.md exists with status \`DRAFT\`:
+     → **STOP**: Tell the user "Amendment is in DRAFT status. Please confirm the amendment first (edit status field in amendment.md to CONFIRMED), then run /opsx:apply again."
+     → Do NOT proceed with task implementation
+   - If amendment.md exists with status \`CONFIRMED\`:
+     → Apply the amendment FIRST before continuing:
+       1. Read the Modification Logic section to understand which artifacts need changes
+       2. Apply modifications to each artifact in the specified order (annotate with version comments like \`<!-- Amendment v{n}: ... -->\`)
+       3. Apply Tasks Rolling Plan to tasks.md (rollback completed tasks, restack pending tasks, append new tasks, deprecate obsolete tasks)
+       4. Update amendment.md status field from CONFIRMED to APPLIED
+     → Then continue with task implementation
+   - If amendment.md exists with status \`APPLIED\` or no amendment.md:
+     → Proceed normally with task implementation
 
 3. **Get apply instructions**
 

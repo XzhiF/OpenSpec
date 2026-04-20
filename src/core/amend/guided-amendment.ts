@@ -1,662 +1,216 @@
 /**
  * Guided Amendment
  *
- * Guides users through amending artifacts based on amendment type.
+ * Guides users through the amend workflow by collecting modification intent
+ * and generating a revision plan. Does NOT directly modify artifact files.
+ *
+ * Redesigned from "guide user to edit each artifact" to:
+ * 1. Collect user's modification description (intent)
+ * 2. Call ModificationAnalyzer to analyze intent
+ * 3. Call AmendmentDrafter to generate amendment.md
+ * 4. Present draft for user confirmation
+ *
+ * Lifecycle: DRAFT → CONFIRMED → APPLIED (execution via /opsx:apply)
  */
 
-import { promises as fs } from 'fs';
-import path from 'path';
 import chalk from 'chalk';
 import type {
   AmendmentType,
   AmendmentState,
   AmendmentRecord,
-  ArtifactChange,
-  SpecChange,
-  TasksChange
+  TaskProgress
 } from './types.js';
 import { getAmendmentTypeDescription } from './types.js';
-import { analyzeImpact } from './impact-analysis.js';
-import { writeSpecChanges } from './spec-writer.js';
+import { draftAmendmentRecord, writeAmendmentDocument } from './amendment-drafter.js';
 import { isInteractive } from '../../utils/interactive.js';
-
-// -----------------------------------------------------------------------------
-// Internal Types
-// -----------------------------------------------------------------------------
-
-/**
- * Internal type for artifacts loaded during amendment.
- */
-interface LoadedArtifacts {
-  proposal: string;
-  design: string;
-  tasks: string;
-  specs: Map<string, string>;
-}
 
 // -----------------------------------------------------------------------------
 // Main Function
 // -----------------------------------------------------------------------------
 
 /**
- * Guide user through amending artifacts.
+ * Guide user through the amend workflow.
+ *
+ * This is the interactive entry point. It collects the user's modification
+ * description and generates the amendment.md document.
+ *
+ * @param changeDir - The change directory path
+ * @param type - Amendment type
+ * @param state - Current amendment state
+ * @param options - Workflow options
+ * @returns Complete AmendmentRecord with DRAFT status
  */
 export async function guidedAmendment(
   changeDir: string,
   type: AmendmentType,
   state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
+  options: { quick?: boolean; noInteractive?: boolean; description?: string }
 ): Promise<AmendmentRecord> {
   console.log(chalk.bold(`\nAmendment: ${getAmendmentTypeDescription(type)}\n`));
+  console.log(chalk.dim('amend generates a revision plan — it does NOT execute modifications.'));
+  console.log(chalk.dim('Actual changes are applied via /opsx:apply after confirmation.\n'));
 
-  // Read existing artifacts
-  const artifacts: LoadedArtifacts = {
-    proposal: await readArtifact(path.join(changeDir, 'proposal.md')),
-    design: await readArtifact(path.join(changeDir, 'design.md')),
-    tasks: await readArtifact(path.join(changeDir, 'tasks.md')),
-    specs: await readSpecs(path.join(changeDir, 'specs'))
+  // ── Step 1: Collect user's modification intent ──
+  const userDescription = options.description || await collectUserDescription(type, options);
+  const triggeredBy = await collectTrigger(state, options);
+
+  // ── Step 2: Build task progress from state ──
+  const progress: TaskProgress = {
+    total: state.progress.completed.length + state.progress.pending.length + (state.progress.inProgress ? 1 : 0),
+    completed: state.progress.completed.length,
+    completedIds: state.progress.completed,
+    inProgressId: state.progress.inProgress,
+    pendingIds: state.progress.pending
   };
 
-  // Initialize record
-  const record: AmendmentRecord = {
-    metadata: {
-      changeName: state.changeName,
-      created: new Date().toISOString(),
-      reason: '',
-      triggeredBy: ''
-    },
-    summary: '',
-    changes: {},
-    impactAnalysis: {
-      codeImpact: { affectedFiles: [], estimatedEffort: '', backwardCompatible: true },
-      dependencyImpact: { remove: [], add: [] }
-    },
-    rollbackPlan: '',
-    nextSteps: []
-  };
+  // ── Step 3: Run analysis and draft amendment ──
+  const version = 1; // Version will be determined by backup manager in command.ts
 
-  // Get user input for reason
-  if (!options.noInteractive && isInteractive()) {
-    const { input } = await import('@inquirer/prompts');
+  console.log(chalk.cyan('\nAnalyzing modification intent...'));
+  const record = await draftAmendmentRecord(
+    changeDir,
+    state.changeName,
+    type,
+    userDescription,
+    triggeredBy,
+    progress,
+    version
+  );
 
-    record.metadata.reason = await input({
-      message: 'Briefly describe what needs to change:',
-      default: getAmendmentTypeDescription(type)
-    });
-
-    record.metadata.triggeredBy = await input({
-      message: 'What triggered this amendment? (e.g., "Task 2.3 implementation")',
-      default: `Task ${state.progress.inProgress || 'implementation'}`
-    });
-  } else {
-    record.metadata.reason = getAmendmentTypeDescription(type);
-    record.metadata.triggeredBy = `Task ${state.progress.inProgress || 'implementation'}`;
-  }
-
-  // Guide based on amendment type
-  switch (type) {
-    case 'design-issue':
-      await guideDesignIssueAmendment(changeDir, artifacts, record, state, options);
-      break;
-    case 'missing-feature':
-      await guideMissingFeatureAmendment(changeDir, artifacts, record, state, options);
-      break;
-    case 'spec-error':
-      await guideSpecErrorAmendment(changeDir, artifacts, record, state, options);
-      break;
-    case 'scope-change':
-      await guideScopeChangeAmendment(changeDir, artifacts, record, state, options);
-      break;
-    default:
-      await guideOtherAmendment(changeDir, artifacts, record, state, options);
-  }
-
-  // Analyze impact
-  record.impactAnalysis = await analyzeImpact(changeDir, record.changes);
-
-  // Generate summary
-  record.summary = generateSummary(record);
-
-  // Generate rollback plan
-  record.rollbackPlan = generateRollbackPlan(record);
-
-  // Generate next steps
-  record.nextSteps = generateNextSteps(record);
+  // ── Step 4: Present amendment summary ──
+  presentAmendmentSummary(record);
 
   return record;
 }
 
 // -----------------------------------------------------------------------------
-// Type-Specific Guidance
+// User Input Collection
 // -----------------------------------------------------------------------------
 
 /**
- * Guide for design-issue amendments.
- * Order: design → specs → proposal → tasks
+ * Collect user's modification description.
  */
-async function guideDesignIssueAmendment(
-  changeDir: string,
-  artifacts: LoadedArtifacts,
-  record: AmendmentRecord,
-  state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<void> {
-  console.log(chalk.dim('\nDesign Issue Amendment'));
-  console.log(chalk.dim('Recommended order: design → specs → proposal → tasks\n'));
-
-  // 1. Design
-  if (state.artifactsToAmend.includes('design')) {
-    const change = await promptArtifactEdit(
-      'design.md',
-      artifacts.design,
-      'Update the technical design approach',
-      options
-    );
-    if (change) {
-      record.changes.design = change;
-      await fs.writeFile(path.join(changeDir, 'design.md'), change.after);
-      console.log(chalk.green('✓ Updated design.md'));
-    }
+async function collectUserDescription(
+  type: AmendmentType,
+  options: { quick?: boolean; noInteractive?: boolean; description?: string }
+): Promise<string> {
+  if (options.description) {
+    return options.description;
   }
-
-  // 2. Specs
-  if (state.artifactsToAmend.includes('specs')) {
-    const specChanges = await promptSpecsEdit(
-      changeDir,
-      artifacts.specs,
-      'Update specs to reflect design changes',
-      options
-    );
-    if (specChanges.length > 0) {
-      record.changes.specs = specChanges;
-
-      // Write changes to actual spec files
-      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
-
-      console.log(chalk.green(`✓ Updated ${specChanges.length} spec files`));
-    }
-  }
-
-  // 3. Proposal
-  if (state.artifactsToAmend.includes('proposal')) {
-    const change = await promptArtifactEdit(
-      'proposal.md',
-      artifacts.proposal,
-      'Update scope/impact if needed',
-      options
-    );
-    if (change) {
-      record.changes.proposal = change;
-      await fs.writeFile(path.join(changeDir, 'proposal.md'), change.after);
-      console.log(chalk.green('✓ Updated proposal.md'));
-    }
-  }
-
-  // 4. Tasks
-  if (state.artifactsToAmend.includes('tasks')) {
-    const tasksChange = await analyzeTasksChange(
-      artifacts.tasks,
-      record.changes,
-      state.progress.completed
-    );
-    record.changes.tasks = tasksChange;
-  }
-}
-
-/**
- * Guide for missing-feature amendments.
- * Order: proposal → specs → tasks
- */
-async function guideMissingFeatureAmendment(
-  changeDir: string,
-  artifacts: LoadedArtifacts,
-  record: AmendmentRecord,
-  state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<void> {
-  console.log(chalk.dim('\nMissing Feature Amendment'));
-  console.log(chalk.dim('Recommended order: proposal → specs → tasks\n'));
-
-  // 1. Proposal
-  if (state.artifactsToAmend.includes('proposal')) {
-    const change = await promptArtifactEdit(
-      'proposal.md',
-      artifacts.proposal,
-      'Expand scope to include missing functionality',
-      options
-    );
-    if (change) {
-      record.changes.proposal = change;
-      await fs.writeFile(path.join(changeDir, 'proposal.md'), change.after);
-      console.log(chalk.green('✓ Updated proposal.md'));
-    }
-  }
-
-  // 2. Specs
-  if (state.artifactsToAmend.includes('specs')) {
-    const specChanges = await promptSpecsEdit(
-      changeDir,
-      artifacts.specs,
-      'Add new requirements for missing functionality',
-      options
-    );
-    if (specChanges.length > 0) {
-      record.changes.specs = specChanges;
-
-      // Write changes to actual spec files
-      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
-
-      console.log(chalk.green(`✓ Added ${specChanges.filter(s => s.operation === 'ADDED').length} new requirements to spec files`));
-    }
-  }
-
-  // 3. Tasks
-  if (state.artifactsToAmend.includes('tasks')) {
-    const tasksChange = await analyzeTasksChange(
-      artifacts.tasks,
-      record.changes,
-      state.progress.completed
-    );
-    record.changes.tasks = tasksChange;
-  }
-}
-
-/**
- * Guide for spec-error amendments.
- * Order: specs → tasks (if needed)
- */
-async function guideSpecErrorAmendment(
-  changeDir: string,
-  artifacts: LoadedArtifacts,
-  record: AmendmentRecord,
-  state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<void> {
-  console.log(chalk.dim('\nSpec Error Amendment'));
-  console.log(chalk.dim('Recommended order: specs → tasks\n'));
-
-  // 1. Specs
-  if (state.artifactsToAmend.includes('specs')) {
-    const specChanges = await promptSpecsEdit(
-      changeDir,
-      artifacts.specs,
-      'Correct the spec to match expected behavior',
-      options
-    );
-    if (specChanges.length > 0) {
-      record.changes.specs = specChanges;
-
-      // Write changes to actual spec files
-      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
-
-      console.log(chalk.green(`✓ Corrected ${specChanges.length} spec issues in files`));
-    }
-  }
-
-  // 2. Tasks (check if affected)
-  if (state.artifactsToAmend.includes('tasks')) {
-    const tasksChange = await analyzeTasksChange(
-      artifacts.tasks,
-      record.changes,
-      state.progress.completed
-    );
-    if (tasksChange.added.length > 0 || tasksChange.modified.length > 0) {
-      record.changes.tasks = tasksChange;
-    }
-  }
-}
-
-/**
- * Guide for scope-change amendments.
- * Order: proposal → specs → design → tasks
- */
-async function guideScopeChangeAmendment(
-  changeDir: string,
-  artifacts: LoadedArtifacts,
-  record: AmendmentRecord,
-  state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<void> {
-  console.log(chalk.dim('\nScope Change Amendment'));
-  console.log(chalk.dim('Recommended order: proposal → specs → design → tasks\n'));
-
-  // 1. Proposal
-  if (state.artifactsToAmend.includes('proposal')) {
-    const change = await promptArtifactEdit(
-      'proposal.md',
-      artifacts.proposal,
-      'Update scope (expand or narrow)',
-      options
-    );
-    if (change) {
-      record.changes.proposal = change;
-      await fs.writeFile(path.join(changeDir, 'proposal.md'), change.after);
-      console.log(chalk.green('✓ Updated proposal.md'));
-    }
-  }
-
-  // 2. Specs
-  if (state.artifactsToAmend.includes('specs')) {
-    const specChanges = await promptSpecsEdit(
-      changeDir,
-      artifacts.specs,
-      'Add/remove requirements based on scope change',
-      options
-    );
-    if (specChanges.length > 0) {
-      record.changes.specs = specChanges;
-
-      // Write changes to actual spec files
-      await writeSpecChanges(changeDir, specChanges, artifacts.specs);
-
-      console.log(chalk.green(`✓ Updated specs in files`));
-    }
-  }
-
-  // 3. Design
-  if (state.artifactsToAmend.includes('design')) {
-    const change = await promptArtifactEdit(
-      'design.md',
-      artifacts.design,
-      'Update design if affected by scope change',
-      options
-    );
-    if (change) {
-      record.changes.design = change;
-      await fs.writeFile(path.join(changeDir, 'design.md'), change.after);
-      console.log(chalk.green('✓ Updated design.md'));
-    }
-  }
-
-  // 4. Tasks
-  if (state.artifactsToAmend.includes('tasks')) {
-    const tasksChange = await analyzeTasksChange(
-      artifacts.tasks,
-      record.changes,
-      state.progress.completed
-    );
-    record.changes.tasks = tasksChange;
-  }
-}
-
-/**
- * Guide for other amendments.
- */
-async function guideOtherAmendment(
-  changeDir: string,
-  artifacts: LoadedArtifacts,
-  record: AmendmentRecord,
-  state: AmendmentState,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<void> {
-  console.log(chalk.dim('\nCustom Amendment'));
-  console.log(chalk.dim('Edit artifacts as needed\n'));
-
-  // Let user choose what to edit
-  if (!options.noInteractive && isInteractive()) {
-    const { checkbox } = await import('@inquirer/prompts');
-
-    const selectedArtifacts = await checkbox({
-      message: 'Which artifacts do you want to edit?',
-      choices: [
-        { name: 'proposal.md', value: 'proposal', checked: true },
-        { name: 'specs/', value: 'specs', checked: true },
-        { name: 'design.md', value: 'design', checked: true },
-        { name: 'tasks.md', value: 'tasks', checked: true }
-      ]
-    });
-
-    for (const artifact of selectedArtifacts) {
-      if (artifact === 'proposal') {
-        const change = await promptArtifactEdit('proposal.md', artifacts.proposal, '', options);
-        if (change) {
-          record.changes.proposal = change;
-          await fs.writeFile(path.join(changeDir, 'proposal.md'), change.after);
-        }
-      } else if (artifact === 'design') {
-        const change = await promptArtifactEdit('design.md', artifacts.design, '', options);
-        if (change) {
-          record.changes.design = change;
-          await fs.writeFile(path.join(changeDir, 'design.md'), change.after);
-        }
-      } else if (artifact === 'specs') {
-        const specChanges = await promptSpecsEdit(changeDir, artifacts.specs, '', options);
-        if (specChanges.length > 0) {
-          record.changes.specs = specChanges;
-
-          // Write changes to actual spec files
-          await writeSpecChanges(changeDir, specChanges, artifacts.specs);
-        }
-      }
-    }
-  }
-
-  // Analyze tasks
-  const tasksChange = await analyzeTasksChange(
-    artifacts.tasks,
-    record.changes,
-    state.progress.completed
-  );
-  record.changes.tasks = tasksChange;
-}
-
-// -----------------------------------------------------------------------------
-// Helper Functions
-// -----------------------------------------------------------------------------
-
-/**
- * Read an artifact file.
- */
-async function readArtifact(filePath: string): Promise<string> {
-  try {
-    return await fs.readFile(filePath, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Read all spec files in a directory.
- */
-async function readSpecs(specsDir: string): Promise<Map<string, string>> {
-  const specs = new Map<string, string>();
-  try {
-    const entries = await fs.readdir(specsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const specFile = path.join(specsDir, entry.name, 'spec.md');
-        try {
-          const content = await fs.readFile(specFile, 'utf-8');
-          specs.set(entry.name, content);
-        } catch {
-          // Skip if file doesn't exist
-        }
-      }
-    }
-  } catch {
-    // Directory doesn't exist
-  }
-  return specs;
-}
-
-/**
- * Prompt user to edit an artifact.
- */
-async function promptArtifactEdit(
-  artifactName: string,
-  currentContent: string,
-  instruction: string,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<ArtifactChange | null> {
-  if (options.noInteractive) {
-    return null;
-  }
-
-  if (!isInteractive()) {
-    return null;
-  }
-
-  const { confirm, editor } = await import('@inquirer/prompts');
-
-  console.log(chalk.dim(`\nEditing ${artifactName}...`));
-  if (instruction) {
-    console.log(chalk.dim(instruction));
-  }
-
-  const shouldEdit = await confirm({
-    message: `Edit ${artifactName}?`,
-    default: true
-  });
-
-  if (!shouldEdit) {
-    return null;
-  }
-
-  // In a real implementation, this would open an editor
-  // For now, we'll return a placeholder
-  const newContent = currentContent; // Would be edited content
-
-  return {
-    before: currentContent,
-    after: newContent,
-    reason: instruction || 'User amendment'
-  };
-}
-
-/**
- * Prompt user to edit specs.
- */
-async function promptSpecsEdit(
-  changeDir: string,
-  specs: Map<string, string>,
-  instruction: string,
-  options: { quick?: boolean; noInteractive?: boolean }
-): Promise<SpecChange[]> {
-  const changes: SpecChange[] = [];
 
   if (options.noInteractive || !isInteractive()) {
-    return changes;
+    return getAmendmentTypeDescription(type);
   }
 
-  // For each spec, ask if changes are needed
-  const { confirm } = await import('@inquirer/prompts');
+  const { input } = await import('@inquirer/prompts');
 
-  for (const [specName, content] of specs) {
-    const shouldEdit = await confirm({
-      message: `Edit specs/${specName}/spec.md?`,
-      default: false
-    });
+  const description = await input({
+    message: 'Describe what needs to change:',
+    default: getAmendmentTypeDescription(type)
+  });
 
-    if (shouldEdit) {
-      // In real implementation, would open editor and detect changes
-      // For now, add placeholder
-      changes.push({
-        specName,
-        operation: 'MODIFIED',
-        requirement: 'Various',
-        details: 'User amendments'
-      });
-    }
-  }
-
-  return changes;
+  return description;
 }
 
 /**
- * Analyze what tasks need to change based on artifact changes.
+ * Collect what triggered the amendment.
  */
-async function analyzeTasksChange(
-  tasksContent: string,
-  changes: AmendmentRecord['changes'],
-  completedTaskIds: string[]
-): Promise<TasksChange> {
-  const tasksChange: TasksChange = {
-    preserved: [],
-    added: [],
-    removed: [],
-    modified: []
-  };
+async function collectTrigger(
+  state: AmendmentState,
+  options: { quick?: boolean; noInteractive?: boolean }
+): Promise<string> {
+  if (state.progress.inProgress) {
+    return `Task ${state.progress.inProgress} implementation`;
+  }
 
-  // Parse existing tasks
-  const lines = tasksContent.split('\n');
-  for (const line of lines) {
-    const taskMatch = line.match(/^-\s+\[([ x])\]\s+(\d+\.\d+)\s+(.+)$/);
-    if (taskMatch) {
-      const completed = taskMatch[1] === 'x';
-      const id = taskMatch[2];
-      const description = taskMatch[3];
+  if (options.noInteractive || !isInteractive()) {
+    return 'Implementation progress';
+  }
 
-      if (completed) {
-        tasksChange.preserved.push({ id, description });
+  const { input } = await import('@inquirer/prompts');
+
+  const triggeredBy = await input({
+    message: 'What triggered this amendment? (e.g., "Task 2.3 implementation")',
+    default: 'Implementation progress'
+  });
+
+  return triggeredBy;
+}
+
+// -----------------------------------------------------------------------------
+// Amendment Summary Presentation
+// -----------------------------------------------------------------------------
+
+/**
+ * Present the amendment draft summary to the user.
+ */
+function presentAmendmentSummary(record: AmendmentRecord): void {
+  console.log(chalk.bold('\nAmendment Draft Summary\n'));
+
+  // Modification Logic
+  if (record.changes.modificationLogic) {
+    console.log(chalk.cyan('Affected Artifacts:'));
+    for (const mod of record.changes.modificationLogic.affectedArtifacts) {
+      console.log(`  ${mod.artifact}: ${mod.action} (${mod.priority})`);
+    }
+    console.log('');
+  }
+
+  // Tasks Rolling Plan
+  if (record.changes.tasksRolling) {
+    const plan = record.changes.tasksRolling;
+    console.log(chalk.cyan('Tasks Rolling Plan:'));
+    if (plan.rollback.length > 0) {
+      console.log(`  Rollback: ${plan.rollback.length} task(s)`);
+      for (const task of plan.rollback) {
+        console.log(`    - ${task.id}: ${task.description}`);
       }
     }
-  }
-
-  // Based on spec changes, add new tasks
-  if (changes.specs) {
-    const addedCount = changes.specs.filter(s => s.operation === 'ADDED').length;
-    for (let i = 0; i < addedCount; i++) {
-      tasksChange.added.push({
-        id: `new.${i + 1}`,
-        description: 'New task from amendment'
-      });
+    if (plan.restack.length > 0) {
+      console.log(`  Restack: ${plan.restack.length} task(s)`);
+      for (const task of plan.restack) {
+        console.log(`    - ${task.id}: ${task.originalDescription} → ${task.newDescription}`);
+      }
     }
+    if (plan.append.length > 0) {
+      console.log(`  Append: ${plan.append.length} new task(s)`);
+      for (const task of plan.append) {
+        console.log(`    - ${task.id}: ${task.description}`);
+      }
+    }
+    if (plan.deprecate.length > 0) {
+      console.log(`  Deprecate: ${plan.deprecate.length} task(s)`);
+      for (const task of plan.deprecate) {
+        console.log(`    - ${task.id}: ${task.description}`);
+      }
+    }
+    console.log('');
   }
 
-  return tasksChange;
-}
-
-/**
- * Generate summary from record.
- */
-function generateSummary(record: AmendmentRecord): string {
-  const parts: string[] = [];
-
-  if (record.changes.proposal) {
-    parts.push('Updated proposal');
-  }
+  // Spec Changes
   if (record.changes.specs?.length) {
-    const ops = record.changes.specs.map(s => s.operation);
-    const added = ops.filter(o => o === 'ADDED').length;
-    const modified = ops.filter(o => o === 'MODIFIED').length;
-    const removed = ops.filter(o => o === 'REMOVED').length;
-    parts.push(`Specs: ${added} added, ${modified} modified, ${removed} removed`);
-  }
-  if (record.changes.design) {
-    parts.push('Updated design');
-  }
-  if (record.changes.tasks) {
-    const t = record.changes.tasks;
-    parts.push(`Tasks: ${t.preserved.length} preserved, ${t.added.length} added, ${t.removed.length} removed`);
+    const added = record.changes.specs.filter(s => s.operation === 'ADDED').length;
+    const modified = record.changes.specs.filter(s => s.operation === 'MODIFIED').length;
+    const removed = record.changes.specs.filter(s => s.operation === 'REMOVED').length;
+    console.log(chalk.cyan('Spec Changes:'));
+    console.log(`  ${added} added, ${modified} modified, ${removed} removed`);
+    console.log('');
   }
 
-  return parts.join('. ');
-}
+  // Impact Analysis
+  console.log(chalk.cyan('Impact Analysis:'));
+  console.log(`  Effort: ${record.impactAnalysis.codeImpact.estimatedEffort}`);
+  console.log(`  Backward Compatible: ${record.impactAnalysis.codeImpact.backwardCompatible ? 'Yes' : 'No'}`);
+  console.log('');
 
-/**
- * Generate rollback plan.
- */
-function generateRollbackPlan(record: AmendmentRecord): string {
-  return `If issues arise:
-1. Restore previous artifacts from git history
-2. amendment.md preserves all changes for reference
-3. Tasks can be re-applied incrementally`;
-}
+  // Confirmation Checklist
+  console.log(chalk.cyan('Confirmation Checklist:'));
+  console.log('  Modification logic correct?      [ ]');
+  console.log('  Change drafts complete?           [ ]');
+  console.log('  Tasks rolling plan feasible?      [ ]');
+  console.log('  Impact analysis acceptable?       [ ]');
+  console.log('  Ready to apply this amendment?    [ ]');
 
-/**
- * Generate next steps.
- */
-function generateNextSteps(record: AmendmentRecord): string[] {
-  const steps: string[] = [];
-
-  if (record.changes.tasks?.added.length) {
-    steps.push('Implement new tasks added by amendment');
-  }
-  if (record.changes.tasks?.modified.length) {
-    steps.push('Update modified tasks to reflect changes');
-  }
-  steps.push('Run tests to verify changes');
-  steps.push('Continue with /opsx:apply when ready');
-
-  return steps;
+  console.log(chalk.dim('\nStatus: DRAFT'));
+  console.log(chalk.dim('Review amendment.md, then confirm to proceed with /opsx:apply.'));
 }

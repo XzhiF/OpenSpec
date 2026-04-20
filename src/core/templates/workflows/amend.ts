@@ -2,6 +2,13 @@
  * Amend Workflow Skill Template
  *
  * Skill template for the /opsx:amend workflow.
+ * Redesigned: Amend = Plan, Not Execute.
+ *
+ * New flow: Analysis → Draft → Confirm → Wait for apply
+ * - amend does NOT directly modify artifacts
+ * - amend generates a revision plan (amendment.md)
+ * - User confirms the plan
+ * - /opsx:apply executes the confirmed plan and continues implementation
  */
 
 import type { SkillTemplate, CommandTemplate } from '../types.js';
@@ -9,18 +16,20 @@ import type { SkillTemplate, CommandTemplate } from '../types.js';
 export function getAmendSkillTemplate(): SkillTemplate {
   return {
     name: 'openspec-amend',
-    description: 'Pause implementation to amend artifacts and resume',
+    description: 'Generate a revision plan for mid-implementation changes. Amend does NOT execute changes — it only plans them. Apply executes via /opsx:apply.',
     license: 'MIT',
     compatibility: 'Requires openspec CLI.',
     metadata: {
       author: 'openspec',
-      version: '1.0'
+      version: '2.0'
     },
     instructions: `
 ## Overview
 
-This workflow handles mid-implementation changes to artifacts (proposal, specs, design, tasks).
-Use when you discover issues during implementation that require going back to update plans.
+This workflow handles mid-implementation changes by generating a **revision plan** (amendment.md).
+**IMPORTANT**: amend does NOT execute changes directly. It only analyzes and plans them.
+
+The actual execution happens via \`/opsx:apply\` after user confirmation.
 
 ## When to Use
 
@@ -35,216 +44,230 @@ Use when you discover issues during implementation that require going back to up
 - A change must be in progress (have tasks.md with tasks)
 - At least some tasks may be completed (preserved during amendment)
 
-## Workflow Steps
+## Workflow Steps (4 Phases)
 
-### Step 1: Identify Amendment Type
+### Phase 1: Analysis
 
-Determine what type of amendment is needed:
+Determine what needs to change:
 
-1. **Design Issue** - Recommended artifact order:
-   - design.md (update technical approach)
-   - specs/ (update behavior specifications)
-   - proposal.md (update scope/impact if needed)
-   - tasks.md (adjust implementation plan)
+1. **Identify Amendment Type**
 
-2. **Missing Feature** - Recommended artifact order:
-   - proposal.md (expand scope)
-   - specs/ (add new requirements)
-   - tasks.md (add new tasks)
+   | Type | Affected Artifacts | Rolling Strategy |
+   |------|--------------------|------------------|
+   | design-issue | design → specs → proposal → tasks | Heavy rolling: rollback conflicts, restack pending |
+   | missing-feature | proposal → specs → tasks | Light rolling: mostly append new tasks |
+   | spec-error | specs → tasks | Minimal rolling: restack affected tasks |
+   | scope-change | proposal → specs → design → tasks | Moderate rolling: deprecate removed, append new |
+   | other | User choice | Default rolling |
 
-3. **Spec Error** - Recommended artifact order:
-   - specs/ (correct the specification)
-   - tasks.md (update if affected)
+2. **Read Current State**
+   - Read all relevant artifacts (proposal.md, design.md, specs/, tasks.md)
+   - Check tasks.md progress: completed, in-progress, pending
+   - Receive user's modification description
 
-4. **Scope Change** - Recommended artifact order:
-   - proposal.md (update scope)
-   - specs/ (add/remove requirements)
-   - design.md (update if affected)
-   - tasks.md (adjust tasks)
+3. **Analyze Modification Intent**
+   - Determine which artifacts are affected (Modification Logic)
+   - For each affected artifact: what action (MODIFY/ADD_REQ/REMOVE_REQ/ROLL), priority, reason
+   - Determine modification order (which artifact to change first)
+   - For tasks.md: classify into rolling operations:
+     - **Rollback**: completed tasks that conflict with new approach
+     - **Restack**: pending tasks that need description/priority changes
+     - **Append**: new tasks to add
+     - **Deprecate**: tasks no longer needed
 
-### Step 2: Read Current State
+### Phase 2: Draft
 
-Before making changes:
+Generate the amendment.md revision plan document:
 
-1. Read all relevant artifacts to understand current state
-2. Check tasks.md progress - identify completed tasks
-3. Understand what triggered the amendment
+1. **Write amendment.md** with status = DRAFT, containing:
+   - Metadata (version, type, reason, triggered by, status)
+   - **Modification Logic** — table of affected artifacts with actions and priorities
+   - **Modification Order** — sequence of changes
+   - **Change Drafts** — planned changes for each artifact (NOT actual modifications)
+   - **Tasks Rolling Plan** — rollback/restack/append/deprecate tables + new task sequence
+   - **Impact Analysis** — affected files, estimated effort, backward compatibility
+   - **Confirmation Checklist** — 5 items for user to check off
+   - **Rollback Plan** — how to revert the amendment itself
+   - **Next Steps** — what to do after confirmation
 
-### Step 3: Make Amendments
+2. **Create backup** via versioned directory (.versions/v{n}/)
 
-For each artifact that needs changes:
+3. **Save amendment state** (.amendment-state.json)
 
-1. **Preserve History** - Add comments like:
-   \`<!-- Amendment: 2025-01-24 - Changed from WebSocket to SSE -->\`
+### Phase 3: Confirm
 
-2. **Mark Changes** - For removed content, use:
-   \`~~Removed content~~ (Reason: explanation)\`
+Present the plan for user confirmation:
 
-3. **Update Content** - Add new/modified content
+1. **Show amendment summary** — affected artifacts, rolling plan, impact
+2. **Show confirmation checklist** — 5 items to verify
+3. **Wait for user confirmation**:
+   - Interactive: prompt to confirm
+   - Non-interactive: status stays DRAFT, user manually edits amendment.md
+   - autoConfirm: mark as CONFIRMED immediately
 
-4. **Validate Format** - Ensure markdown is properly formatted
+4. **Update status**:
+   - Confirmed → status = CONFIRMED
+   - Not confirmed → status stays DRAFT
 
-### Step 4: Generate Amendment Record
+### Phase 4: Wait for Apply
 
-Create amendment.md with:
+amend does NOT execute modifications. After confirmation:
 
-\`\`\`markdown
-# Amendment: [Change Name]
+1. Tell user: "Amendment confirmed. Run \`/opsx:apply\` to execute the revision plan and continue implementation."
+2. \`/opsx:apply\` will:
+   - Check for CONFIRMED amendments
+   - Execute the modification logic (annotate and modify artifacts)
+   - Apply the tasks rolling plan
+   - Update amendment status to APPLIED
+   - Continue with task implementation
 
-## Metadata
-- Created: [timestamp]
-- Reason: [why amendment was needed]
-- Triggered By: [what discovered the issue]
+## Amendment Lifecycle
 
-## Summary
-[Brief description of changes]
+\`\`\`
+DRAFT → CONFIRMED → APPLIED
 
-## Changes
-
-### Proposal Changes
-[If changed]
-
-### Spec Changes
-#### ADDED Requirements
-#### MODIFIED Requirements
-#### REMOVED Requirements
-
-### Design Changes
-[If changed]
-
-### Tasks Changes
-- Preserved: [count] tasks
-- Added: [count] tasks
-- Removed: [count] tasks
-- Modified: [count] tasks
-
-## Impact Analysis
-- Affected Files: [list]
-- Estimated Effort: [time]
-- Backward Compatible: [yes/no]
-
-## Rollback Plan
-[Steps to revert if needed]
-
-## Next Steps
-[What to do after amendment]
+DRAFT:    Plan generated, awaiting user review
+CONFIRMED: User approved, ready for execution by /opsx:apply
+APPLIED:   Changes executed, implementation continues
 \`\`\`
 
-### Step 5: Update Tasks
+## Tasks Rolling Mechanism
 
-Update tasks.md:
+When the implementation approach changes, tasks.md needs "rolling" operations:
 
-1. **Preserve Completed Tasks** - Keep all [x] tasks marked
-2. **Add New Tasks** - Use appropriate numbering
-3. **Comment Removed Tasks** - Don't delete, comment with reason:
-   \`<!-- - [ ] 2.4 Old task - Removed: No longer needed with new approach -->\`
-4. **Add Amendment Note** - At top of file:
-   \`<!-- Amendment: [date] - [summary] -->\`
+### Rollback (completed tasks that conflict)
+\`\`\`
+- [x→ROLLBACK] 1.2 Add Socket.io dependencies
+  <!-- Amendment v2: Marked for rollback → Remove in v2 -->
+\`\`\`
 
-### Step 6: Resume Implementation
+### Restack (pending tasks that need adjustment)
+\`\`\`
+- [ ] 2.1 Implement SSE endpoint
+  <!-- Amendment v2: RESTACK → was: Implement WebSocket handler -->
+\`\`\`
 
-After amendment:
+### Append (new tasks to add)
+\`\`\`
+- [ ] 2.4 Add EventQueue for broadcasting
+  <!-- Amendment v2: APPEND → section 2, after 2.3 -->
+\`\`\`
 
-1. Run \`/opsx:apply\` to continue implementation
-2. AI will read updated artifacts
-3. Continue from where you left off
+### Deprecate (tasks no longer needed)
+\`\`\`
+<!-- - [ ] 1.4 Redis adapter tests -->
+<!--   Amendment v2: DEPRECATED → No Redis in new approach -->
+\`\`\`
 
 ## Important Rules
 
-1. **Never Delete Completed Tasks** - Always preserve [x] items
-2. **Document Why** - Every change should have a reason
-3. **Keep History** - Comment out removed content instead of deleting
-4. **Validate Specs** - Ensure specs still follow Given/When/Then format
-5. **Update Dependencies** - If design changes, update tasks accordingly
+1. **amend NEVER executes modifications** — it only generates the revision plan
+2. **Document Why** — every change should have a reason in the plan
+3. **Keep History** — deprecated/rollback tasks are preserved as comments, not deleted
+4. **Modification Order matters** — changes are applied in the specified order
+5. **Rolling plan is critical** — the new task sequence must be reviewed before confirmation
+6. **Confirmation is mandatory** — user must check all 5 checklist items before status becomes CONFIRMED
 
 ## Examples
 
 ### Example 1: Design Issue
 
 \`\`\`
-User: /opsx:amend --type design-issue
+User: /opsx:amend --type design-issue --description "Switch from WebSocket to SSE"
 
 AI: Amendment type: Design Issue
+Description: Switch from WebSocket to SSE
 
-What design issue did you discover?
-> WebSocket approach requires sticky sessions, want to use SSE instead
+Analyzing modification intent...
+✓ Affected artifacts: design (MODIFY, P0), specs (MODIFY, P1), tasks (ROLL, P0)
+✓ Tasks rolling: 2 rollback, 1 restack, 3 append, 1 deprecate
 
-Let me update the artifacts...
+Drafting amendment.md...
+✓ Generated amendment.md (v2, status: DRAFT)
 
-✓ Updated design.md - Changed to SSE approach
-✓ Updated specs/notifications/spec.md - Replaced WebSocket requirements
-✓ Updated tasks.md - Adjusted implementation tasks
+Amendment Draft (v2):
+  Affected Artifacts:
+    design: MODIFY (P0)
+    specs: MODIFY (P1)
+    tasks: ROLL (P0)
+  Tasks Rolling Plan:
+    Rollback: 2 task(s)
+    Restack: 1 task(s)
+    Append: 3 new task(s)
+    Deprecate: 1 task(s)
 
-Amendment summary:
-- Design: Socket.io → Native SSE
-- Specs: 3 requirements modified
-- Tasks: 2 added, 1 removed
+Confirmation Checklist:
+  Modification logic correct?      [ ]
+  Change drafts complete?           [ ]
+  Tasks rolling plan feasible?      [ ]
+  Impact analysis acceptable?       [ ]
+  Ready to apply this amendment?    [ ]
 
-Generated: amendment.md
+Confirm this amendment? (Changes will be applied via /opsx:apply)
+> Yes
 
-Ready to continue implementation?
+✓ Amendment confirmed! Status: CONFIRMED
+
+Next: Run \`/opsx:apply\` to execute the amendment and continue implementation.
 \`\`\`
 
 ### Example 2: Missing Feature
 
 \`\`\`
-User: /opsx:amend --type missing-feature
+User: /opsx:amend --type missing-feature --description "Password change and email verification"
 
-AI: What functionality is missing?
-> Password change and email verification
+AI: Amendment type: Missing Feature
+Description: Password change and email verification
 
-Updating artifacts...
+Analyzing modification intent...
+✓ Affected artifacts: proposal (MODIFY, P1), specs (ADD_REQ, P1), tasks (ROLL, P0)
+✓ Tasks rolling: 0 rollback, 0 restack, 4 append, 0 deprecate
 
-✓ Updated proposal.md - Expanded scope
-✓ Added requirements to specs/user-profile/spec.md
-  - Password Change requirement
-  - Email Verification requirement
-✓ Updated tasks.md - Added 7 new tasks
+Drafting amendment.md...
+✓ Generated amendment.md (v1, status: DRAFT)
 
-Progress: 5 completed, 12 new total (7 new tasks)
+[... summary shown ...]
 
-Generated: amendment.md
-\`\`\`
+Confirm this amendment?
+> Yes
 
-### Example 3: Spec Error
+✓ Amendment confirmed! Status: CONFIRMED
 
-\`\`\`
-User: /opsx:amend --type spec-error
-
-AI: What spec error did you find?
-> Token expiration should be 15 minutes, not 7 days
-
-✓ Updated specs/auth/spec.md
-  - MODIFIED: Session Expiration requirement
-  - Changed: 7 days → 15 minutes
-
-No tasks affected - they were not yet implemented.
-
-Generated: amendment.md
+Next: Run \`/opsx:apply\` to execute the amendment and continue implementation.
 \`\`\`
 
 ## Integration with Apply
 
-When \`/opsx:apply\` encounters an issue:
+\`\`\`
+amend  ──→  Generate revision plan (amendment.md)  ──→  User confirms
+                                                    │
+                                                    ▼
+apply  ──→  Execute revision plan (modify artifacts) ──→  Continue tasks
+\`\`\`
 
-1. AI pauses and explains the issue
-2. AI suggests running \`/opsx:amend\`
-3. User runs amend workflow
-4. AI detects amendment.md and reads updates
-5. AI continues implementation with new context
+When \`/opsx:apply\` encounters a CONFIRMED amendment:
+1. Apply modification logic (annotate and modify artifacts in order)
+2. Apply tasks rolling plan
+3. Update amendment status to APPLIED
+4. Continue with task implementation
+
+If \`/opsx:apply\` encounters a DRAFT amendment:
+- STOP and tell user to confirm the amendment first
 
 ## Output Files
 
-- \`amendment.md\` - Record of all changes (added to change directory)
-- \`.amendment-state.json\` - Runtime state (temporary, for recovery)
-- Updated artifacts (proposal.md, specs/, design.md, tasks.md)
+- \`amendment.md\` — Revision plan document (status: DRAFT → CONFIRMED → APPLIED)
+- \`amendment-v{n}.md\` — Versioned copy of amendment.md
+- \`.amendment-state.json\` — Runtime state (for tracking amendment lifecycle)
+- \`.versions/v{n}/\` — Backup of artifacts before amendment
 
 ## Notes
 
-- An amendment preserves all completed work
-- Multiple amendments can be made to one change
-- Each amendment creates a new amendment.md entry
-- Old amendments are preserved for history
+- amend does NOT directly modify any artifact files
+- Multiple amendments can be made to one change (each gets a version number)
+- The revision plan is a living document — user can edit it before confirming
+- After APPLIED, the amendment cannot be re-applied (but a new amendment can be created)
+- Backup exists at .versions/v{n-1}/ if the amendment needs to be reverted
 `
   };
 }
@@ -252,9 +275,9 @@ When \`/opsx:apply\` encounters an issue:
 export function getOpsxAmendCommandTemplate(): CommandTemplate {
   return {
     name: 'opsx-amend',
-    description: 'Amend artifacts during implementation and resume',
+    description: 'Generate a revision plan for mid-implementation changes. Does NOT execute — use /opsx:apply to execute confirmed amendments.',
     category: 'workflow',
-    tags: ['amend', 'change', 'resume', 'mid-implementation'],
+    tags: ['amend', 'change', 'revision-plan', 'mid-implementation'],
     content: getAmendSkillTemplate().instructions
   };
 }

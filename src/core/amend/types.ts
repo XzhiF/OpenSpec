@@ -2,7 +2,21 @@
  * Amendment Types
  *
  * Type definitions for the amend workflow system.
+ * Redesigned to support: Analysis → Draft → Confirm → Apply pattern
+ * with Tasks Rolling mechanism (Rollback/Restack/Append/Deprecate).
  */
+
+// -----------------------------------------------------------------------------
+// Amendment Status
+// -----------------------------------------------------------------------------
+
+/**
+ * Lifecycle status of an amendment.
+ * DRAFT: Amendment plan generated, awaiting user confirmation
+ * CONFIRMED: User confirmed the plan, ready to be applied
+ * APPLIED: Amendment changes have been applied to artifacts
+ */
+export type AmendmentStatus = 'DRAFT' | 'CONFIRMED' | 'APPLIED';
 
 // -----------------------------------------------------------------------------
 // Amendment Type
@@ -32,6 +46,157 @@ export interface AmendmentTypeOption {
 }
 
 // -----------------------------------------------------------------------------
+// Modification Logic
+// -----------------------------------------------------------------------------
+
+/**
+ * Action to take on an affected artifact.
+ */
+export type ArtifactAction = 'MODIFY' | 'ADD_REQ' | 'REMOVE_REQ' | 'ROLL';
+
+/**
+ * Priority level for artifact modification.
+ */
+export type ArtifactPriority = 'P0' | 'P1' | 'P2';
+
+/**
+ * A single artifact that needs modification.
+ */
+export interface ArtifactModification {
+  /** Artifact identifier (e.g., 'proposal', 'design', 'specs/auth', 'tasks') */
+  artifact: string;
+  /** Action to take */
+  action: ArtifactAction;
+  /** Priority level */
+  priority: ArtifactPriority;
+  /** Why this artifact needs modification */
+  reason: string;
+}
+
+/**
+ * Overall modification logic for the amendment.
+ */
+export interface ModificationLogic {
+  /** List of affected artifacts with their actions */
+  affectedArtifacts: ArtifactModification[];
+  /** Order in which modifications should be executed */
+  modificationOrder: string[];
+}
+
+// -----------------------------------------------------------------------------
+// Tasks Rolling Plan
+// -----------------------------------------------------------------------------
+
+/**
+ * A completed task that needs to be rolled back.
+ */
+export interface RollbackTask {
+  /** Task ID (e.g., '1.2') */
+  id: string;
+  /** Task description */
+  description: string;
+  /** What rollback action to take */
+  rollbackAction: string;
+  /** Code/files that need to be removed or modified */
+  rollbackCode: string;
+}
+
+/**
+ * A pending task that needs to be restacked (reordered/modified).
+ */
+export interface RestackTask {
+  /** Task ID */
+  id: string;
+  /** Original task description */
+  originalDescription: string;
+  /** New task description */
+  newDescription: string;
+  /** Why this task needs restacking */
+  reason: string;
+}
+
+/**
+ * A new task to append to the task list.
+ */
+export interface AppendTask {
+  /** Task ID (new numbering) */
+  id: string;
+  /** Task description */
+  description: string;
+  /** Section to place this task in */
+  section: string;
+  /** Insert after this task ID */
+  afterTask: string;
+}
+
+/**
+ * A task that should be deprecated (no longer needed).
+ */
+export interface DeprecateTask {
+  /** Task ID */
+  id: string;
+  /** Task description */
+  description: string;
+  /** Why this task is deprecated */
+  reason: string;
+}
+
+/**
+ * Status marker for a task in the rolled sequence.
+ */
+export type TaskSequenceStatus = 'pending' | 'completed' | 'rollback' | 'restack' | 'append';
+
+/**
+ * A single task item in the rolled sequence.
+ */
+export interface TaskSequenceItem {
+  /** Task ID */
+  id: string;
+  /** Task description */
+  description: string;
+  /** Status marker */
+  status: TaskSequenceStatus;
+  /** Section heading */
+  section: string;
+}
+
+/**
+ * Complete rolling plan for tasks.md changes.
+ */
+export interface TasksRollingPlan {
+  /** Completed tasks that need rollback */
+  rollback: RollbackTask[];
+  /** Pending tasks that need restacking */
+  restack: RestackTask[];
+  /** New tasks to append */
+  append: AppendTask[];
+  /** Tasks no longer needed */
+  deprecate: DeprecateTask[];
+  /** Complete task sequence after rolling */
+  newSequence: TaskSequenceItem[];
+}
+
+// -----------------------------------------------------------------------------
+// Confirmation Checklist
+// -----------------------------------------------------------------------------
+
+/**
+ * Checklist items for user to confirm before applying amendment.
+ */
+export interface ConfirmationChecklist {
+  /** Modification logic is correct */
+  modificationLogicCorrect: boolean;
+  /** Change drafts are complete and accurate */
+  changeDraftsComplete: boolean;
+  /** Tasks rolling plan is feasible */
+  tasksRollingFeasible: boolean;
+  /** Impact analysis is acceptable */
+  impactAcceptable: boolean;
+  /** Ready to apply this amendment */
+  readyToApply: boolean;
+}
+
+// -----------------------------------------------------------------------------
 // Amendment State
 // -----------------------------------------------------------------------------
 
@@ -46,6 +211,8 @@ export interface AmendmentState {
   timestamp: string;
   /** Type of amendment being performed */
   amendmentType: AmendmentType;
+  /** Lifecycle status */
+  status: AmendmentStatus;
   /** Task progress at the time of amendment */
   progress: {
     /** IDs of completed tasks */
@@ -92,7 +259,7 @@ export interface SpecChange {
 }
 
 /**
- * Individual task item.
+ * Individual task item (legacy, kept for backward compat).
  */
 export interface TaskItem {
   /** Task ID (e.g., '1.1', '2.3') */
@@ -104,7 +271,8 @@ export interface TaskItem {
 }
 
 /**
- * Changes to tasks.md.
+ * Changes to tasks.md (legacy, kept for backward compat).
+ * Superseded by TasksRollingPlan in the new flow.
  */
 export interface TasksChange {
   /** Tasks that remain valid and completed */
@@ -164,6 +332,8 @@ export interface AmendmentRecord {
     reason: string;
     /** What triggered the amendment (e.g., 'Task 2.3 implementation') */
     triggeredBy: string;
+    /** Lifecycle status */
+    status: AmendmentStatus;
   };
   /** Brief summary of the amendment */
   summary: string;
@@ -175,8 +345,12 @@ export interface AmendmentRecord {
     specs?: SpecChange[];
     /** Changes to design.md */
     design?: ArtifactChange;
-    /** Changes to tasks.md */
+    /** Rolling plan for tasks.md (new) */
+    tasksRolling?: TasksRollingPlan;
+    /** Legacy tasks change (backward compat) */
     tasks?: TasksChange;
+    /** Modification logic (new) */
+    modificationLogic?: ModificationLogic;
   };
   /** Impact analysis results */
   impactAnalysis: {
@@ -187,6 +361,8 @@ export interface AmendmentRecord {
   rollbackPlan: string;
   /** Steps to take after amendment */
   nextSteps: string[];
+  /** Confirmation checklist (new) */
+  confirmationChecklist: ConfirmationChecklist;
 }
 
 // -----------------------------------------------------------------------------
@@ -227,6 +403,10 @@ export interface AmendOptions {
   quick?: boolean;
   /** Non-interactive mode */
   noInteractive?: boolean;
+  /** User's modification description (for non-interactive mode) */
+  description?: string;
+  /** Auto-confirm the amendment (skip manual confirmation) */
+  autoConfirm?: boolean;
 }
 
 // -----------------------------------------------------------------------------
@@ -247,14 +427,38 @@ export interface AmendmentResult {
   amendmentPath?: string;
   /** Error message if failed */
   error?: string;
-  /** Number of tasks preserved */
+  /** Lifecycle status of the amendment */
+  status?: AmendmentStatus;
+  /** Number of tasks preserved (legacy) */
   tasksPreserved: number;
-  /** Number of tasks added */
-  tasksAdded: number;
-  /** Number of tasks removed */
-  tasksRemoved: number;
-  /** Number of tasks modified */
-  tasksModified: number;
+  /** Number of rollback tasks */
+  tasksRollback: number;
+  /** Number of restacked tasks */
+  tasksRestack: number;
+  /** Number of appended tasks */
+  tasksAppend: number;
+  /** Number of deprecated tasks */
+  tasksDeprecate: number;
+}
+
+// -----------------------------------------------------------------------------
+// Task Progress
+// -----------------------------------------------------------------------------
+
+/**
+ * Progress snapshot at time of amendment.
+ */
+export interface TaskProgress {
+  /** Total number of tasks */
+  total: number;
+  /** Number of completed tasks */
+  completed: number;
+  /** IDs of completed tasks */
+  completedIds: string[];
+  /** ID of task currently in progress */
+  inProgressId: string | null;
+  /** IDs of pending tasks */
+  pendingIds: string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -294,4 +498,29 @@ export function getAmendmentTypeDescription(type: AmendmentType): string {
     'other': 'Other reason'
   };
   return descriptions[type];
+}
+
+/**
+ * Get rolling strategy weight for a given amendment type.
+ * Higher weight = more aggressive rolling.
+ */
+export function getRollingStrategyWeight(type: AmendmentType): {
+  rollbackWeight: number;
+  restackWeight: number;
+  appendWeight: number;
+  deprecateWeight: number;
+} {
+  const strategies: Record<AmendmentType, {
+    rollbackWeight: number;
+    restackWeight: number;
+    appendWeight: number;
+    deprecateWeight: number;
+  }> = {
+    'design-issue':   { rollbackWeight: 3, restackWeight: 3, appendWeight: 1, deprecateWeight: 2 },
+    'missing-feature': { rollbackWeight: 0, restackWeight: 0, appendWeight: 3, deprecateWeight: 0 },
+    'spec-error':     { rollbackWeight: 0, restackWeight: 1, appendWeight: 1, deprecateWeight: 0 },
+    'scope-change':   { rollbackWeight: 1, restackWeight: 2, appendWeight: 2, deprecateWeight: 2 },
+    'other':          { rollbackWeight: 1, restackWeight: 1, appendWeight: 1, deprecateWeight: 1 }
+  };
+  return strategies[type];
 }
