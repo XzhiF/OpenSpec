@@ -1,21 +1,23 @@
 {
-  "name": "@fission-ai/openspec",
-  "version": "1.2.0",
-  "description": "AI-native system for spec-driven development",
+  "name": "xzf-openspec",
+  "version": "1.3.1",
+  "description": "Extended OpenSpec with amend workflow (includes backup and version tracking) - Personal customized version",
   "keywords": [
     "openspec",
+    "xzf",
     "specs",
     "cli",
     "ai",
+    "amend",
     "development"
   ],
-  "homepage": "https://github.com/Fission-AI/OpenSpec",
+  "homepage": "https://github.com/XzhiF/OpenSpec",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Fission-AI/OpenSpec"
+    "url": "https://github.com/XzhiF/OpenSpec"
   },
   "license": "MIT",
-  "author": "OpenSpec Contributors",
+  "author": "xiezhifeng",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -27,7 +29,8 @@
     }
   },
   "bin": {
-    "openspec": "./bin/openspec.js"
+    "xzf-openspec": "./bin/openspec.js",
+    "xos": "./bin/openspec.js"
   },
   "files": [
     "dist",
@@ -50,11 +53,7 @@
     "test:postinstall": "node scripts/postinstall.js",
     "prepare": "pnpm run build",
     "prepublishOnly": "pnpm run build",
-    "postinstall": "node scripts/postinstall.js",
-    "check:pack-version": "node scripts/pack-version-check.mjs",
-    "release": "pnpm run release:ci",
-    "release:ci": "pnpm run check:pack-version && pnpm exec changeset publish",
-    "changeset": "changeset"
+    "postinstall": "node scripts/postinstall.js"
   },
   "engines": {
     "node": ">=20.19.0"
